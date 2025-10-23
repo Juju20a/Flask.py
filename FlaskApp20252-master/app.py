@@ -1,86 +1,146 @@
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, abort
+from models.Usuario import Usuario
+from models.InstituicaoEnsino import InstituicaoEnsino
+from helpers.data import getInstituicoesEnsino
+import json
+import os
 
-from models.Usuario import Usuario  
-from helpers.data import getInstituicoesEnsino  # Função para carregar instituições de ensino
-from models.InstituicaoEnsino import InstituicaoEnsino  # Importa o modelo InstituicaoEnsino
-
-# Criação da aplicação Flask
 app = Flask(__name__)
 
-# Criação de um usuário inicial para teste
-usuario = Usuario(1, "João", "00011122233", "2025-10-09")
-usuarios = [usuario]  # Lista inicial de usuários
+# Caminhos dos arquivos de dados
+DATA_DIR = "data"
+USERS_FILE = os.path.join(DATA_DIR, "usuarios.json")
+INSTIT_FILE = os.path.join(DATA_DIR, "instituicoes.json")
 
-# Carregamento das instituições de ensino a partir dos dados
-instituicoesEnsino = getInstituicoesEnsino()
+# Garante que a pasta exista
+os.makedirs(DATA_DIR, exist_ok=True)
 
-# Rota principal para verificar a versão da API
+# Funções utilitárias de leitura e escrita JSON
+def read_json(path):
+    if not os.path.exists(path):
+        return []
+    with open(path, "r", encoding="utf-8") as f:
+        try:
+            return json.load(f)
+        except json.JSONDecodeError:
+            return []
+
+def write_json(path, data):
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+
+# --- Inicialização de dados ---
+usuarios = read_json(USERS_FILE)
+instituicoesEnsino = read_json(INSTIT_FILE)
+
+# Rota principal
 @app.get("/")
 def index():
-    return '{"versao":"2.0.0"}', 200
+    return jsonify({"versao": "2.0.0"}), 200
 
-# Rota para listar todos os usuários
+
+
 @app.get("/usuarios")
 def getUsuarios():
-    return jsonify(usuarios)
+    return jsonify(usuarios), 200
 
-# Rota para obter um usuário específico pelo ID
 @app.get("/usuarios/<int:id>")
-def getUsuariosById(id: int):
-    return jsonify(usuarios[id])
+def getUsuarioById(id):
+    for u in usuarios:
+        if u["id"] == id:
+            return jsonify(u), 200
+    abort(404, "Usuário não encontrado")
 
-# Rota para criar um novo usuário
 @app.post("/usuarios")
 def createUsuario():
-    data = request.get_json()  # Obtém os dados enviados no corpo da requisição
-    novo_usuario = Usuario(
-        id=len(usuarios),  # Define o ID como o próximo na lista
-        nome=data.get("nome"),
-        cpf=data.get("cpf"),
-        nascimento=data.get("nascimento")
-    )
-    usuarios.append(novo_usuario)  # Adiciona o novo usuário à lista
-    return jsonify(novo_usuario.to_json()), 201  # Retorna o usuário criado com status 201
+    data = request.get_json()
+    if not data or "nome" not in data or "cpf" not in data:
+        abort(400, "Campos obrigatórios: nome e cpf")
 
-# Rota para listar todas as instituições de ensino
+    new_id = max([u["id"] for u in usuarios], default=0) + 1
+    novo_usuario = {
+        "id": new_id,
+        "nome": data["nome"],
+        "cpf": data["cpf"],
+        "nascimento": data.get("nascimento")
+    }
+    usuarios.append(novo_usuario)
+    write_json(USERS_FILE, usuarios)
+    return jsonify(novo_usuario), 201
+
+@app.put("/usuarios/<int:id>")
+def updateUsuario(id):
+    data = request.get_json()
+    for i, u in enumerate(usuarios):
+        if u["id"] == id:
+            usuarios[i].update(data)
+            write_json(USERS_FILE, usuarios)
+            return jsonify(usuarios[i]), 200
+    abort(404, "Usuário não encontrado")
+
+@app.delete("/usuarios/<int:id>")
+def deleteUsuario(id):
+    global usuarios
+    novos = [u for u in usuarios if u["id"] != id]
+    if len(novos) == len(usuarios):
+        abort(404, "Usuário não encontrado")
+    usuarios = novos
+    write_json(USERS_FILE, usuarios)
+    return "", 204
+
+
+
 @app.get("/instituicoesensino")
-def getInstituicoesEnsino():
-    # Converte as instituições para JSON antes de retornar
-    instituicoesEnsinoJson = [instituicaoEnsino.to_json()
-                              for instituicaoEnsino in instituicoesEnsino]
-    return jsonify(instituicoesEnsinoJson), 200
+def getInstituicoesEnsinoRoute():
+    return jsonify(instituicoesEnsino), 200
 
-# Rota para obter uma instituição específica pelo ID
 @app.get("/instituicoesensino/<int:id>")
-def getInstituicoesEnsinoById(id: int):
-    ieDict = instituicoesEnsino[id].to_json()  # Converte a instituição para JSON
-    return jsonify(ieDict), 200
+def getInstituicaoById(id):
+    for ie in instituicoesEnsino:
+        if ie["codigo"] == id:
+            return jsonify(ie), 200
+    abort(404, "Instituição não encontrada")
 
-# Rota para obter um atributo específico de um usuário
-@app.get("/usuarios/<int:id>/<string:key>")
-def getUsuarioAttribute(id: int, key: str):
-    return jsonify(usuarios[id].get(key)), 200
-
-# Rota para obter um atributo específico de uma instituição de ensino
-@app.get("/instituicoesensino/<int:id>/<string:key>")
-def getInstituicaoEnsinoAttribute(id: int, key: str):
-    return jsonify(instituicoesEnsino[id].get(key)), 200
-
-# Rota para criar uma nova instituição de ensino
 @app.post("/instituicoesensino")
 def createInstituicaoEnsino():
-    data = request.get_json()  # Obtém os dados enviados no corpo da requisição
-    nova_instituicao = InstituicaoEnsino(
-        codigo=len(instituicoesEnsino),  # Define o código como o próximo na lista
-        nome=data.get("nome"),
-        co_uf=data.get("co_uf"),
-        co_municipio=data.get("co_municipio"),
-        qt_mat_bas=data.get("qt_mat_bas"),
-        qt_mat_prof=data.get("qt_mat_prof"),
-        qt_mat_eja=data.get("qt_mat_eja"),
-        qt_mat_esp=data.get("qt_mat_esp")
-    )
-    instituicoesEnsino.append(nova_instituicao)  # Adiciona a nova instituição à lista
-    return jsonify(nova_instituicao.to_json()), 201  # Retorna a instituição criada com status 201
+    data = request.get_json()
+    if not data or "nome" not in data:
+        abort(400, "Campo 'nome' é obrigatório")
 
-# todo: entregar endpoints completos de IE e Usuarios.
+    new_id = max([ie["codigo"] for ie in instituicoesEnsino], default=0) + 1
+    nova_ie = {
+        "codigo": new_id,
+        "nome": data["nome"],
+        "co_uf": data.get("co_uf"),
+        "co_municipio": data.get("co_municipio"),
+        "qt_mat_bas": data.get("qt_mat_bas"),
+        "qt_mat_prof": data.get("qt_mat_prof"),
+        "qt_mat_eja": data.get("qt_mat_eja"),
+        "qt_mat_esp": data.get("qt_mat_esp"),
+    }
+    instituicoesEnsino.append(nova_ie)
+    write_json(INSTIT_FILE, instituicoesEnsino)
+    return jsonify(nova_ie), 201
+
+@app.put("/instituicoesensino/<int:id>")
+def updateInstituicaoEnsino(id):
+    data = request.get_json()
+    for i, ie in enumerate(instituicoesEnsino):
+        if ie["codigo"] == id:
+            instituicoesEnsino[i].update(data)
+            write_json(INSTIT_FILE, instituicoesEnsino)
+            return jsonify(instituicoesEnsino[i]), 200
+    abort(404, "Instituição não encontrada")
+
+@app.delete("/instituicoesensino/<int:id>")
+def deleteInstituicaoEnsino(id):
+    global instituicoesEnsino
+    novas = [ie for ie in instituicoesEnsino if ie["codigo"] != id]
+    if len(novas) == len(instituicoesEnsino):
+        abort(404, "Instituição não encontrada")
+    instituicoesEnsino = novas
+    write_json(INSTIT_FILE, instituicoesEnsino)
+    return "", 204
+
+if __name__ == "__main__":
+    app.run(debug=True, port=5000)
